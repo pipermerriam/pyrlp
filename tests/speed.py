@@ -135,26 +135,60 @@ def do_test_deserialize(data, rounds=100, sedes=Block):
     return x
 
 
+empty_str = b''
+single_str = b'a'
+short_str = b'arst'
+long_str = b'arst' * 100
+really_long_str = b'arst' * 1000
+
+empty_list = []
+short_list = [b'a']
+medium_list = [b'a', b'arst', b'tsra', b'', long_str]
+long_list = [short_str, empty_str, long_str, really_long_str] * 10
+really_long_list = [short_str, empty_str, long_str, really_long_str] * 100
+
+
+
 def main(rounds=10000):
-    st = time.time()
-    d = do_test_serialize(mk_block(), rounds)
-    elapsed = time.time() - st
-    print('Block serializations / sec: %.2f' % (rounds / elapsed))
+    #st = time.time()
+    #d = do_test_serialize(mk_block(), rounds)
+    #elapsed = time.time() - st
+    #print('Block serializations / sec: %.2f' % (rounds / elapsed))
 
-    st = time.time()
-    d = do_test_deserialize(d, rounds)
-    elapsed = time.time() - st
-    print('Block deserializations / sec: %.2f' % (rounds / elapsed))
+    #st = time.time()
+    #d = do_test_deserialize(d, rounds)
+    #elapsed = time.time() - st
+    #print('Block deserializations / sec: %.2f' % (rounds / elapsed))
 
-    st = time.time()
-    d = do_test_serialize(mk_transaction(), rounds)
-    elapsed = time.time() - st
-    print('TX serializations / sec: %.2f' % (rounds / elapsed))
+    #st = time.time()
+    #d = do_test_serialize(mk_transaction(), rounds)
+    #elapsed = time.time() - st
+    #print('TX serializations / sec: %.2f' % (rounds / elapsed))
 
-    st = time.time()
-    d = do_test_deserialize(d, rounds, sedes=Transaction)
-    elapsed = time.time() - st
-    print('TX deserializations / sec: %.2f' % (rounds / elapsed))
+    #st = time.time()
+    #d = do_test_deserialize(d, rounds, sedes=Transaction)
+    #elapsed = time.time() - st
+    #print('TX deserializations / sec: %.2f' % (rounds / elapsed))
+
+    todo = (
+        ('empty str', empty_str),
+        ('single chr str', single_str),
+        ('short str', short_str),
+        ('long str', long_str),
+        ('really long str', really_long_str),
+        ('empty list', empty_list),
+        ('short list', short_list),
+        ('medium list', medium_list),
+        ('long list', long_list),
+        ('really long list', really_long_list),
+    )
+    for label, value in todo:
+        e_value = rlp.encode(value)
+        st = time.time()
+        d = do_test_deserialize(e_value, rounds, sedes=None)
+        elapsed = time.time() - st
+        assert d == value
+        print('%s deserializations / sec: %.2f' % (label, rounds / elapsed))
 
 
 if __name__ == '__main__':

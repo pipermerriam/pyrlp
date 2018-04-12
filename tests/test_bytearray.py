@@ -1,4 +1,5 @@
 # -*- coding: utf8 -*-
+import pytest
 from rlp import (
     encode,
     decode,
@@ -13,6 +14,7 @@ def test_bytearray():
     assert actual == expected
 
 
+@pytest.mark.skip()
 def test_bytearray_lazy():
     e = encode(b'abc')
     expected = decode(e)
@@ -26,3 +28,16 @@ def test_encoding_bytearray():
     from_bytearray = encode(bytearray(s))
     assert direct == from_bytearray
     assert decode(direct) == s
+
+
+def encode_empty():
+    s = encode(b'')
+    actual = decode(s)
+    assert actual == b''
+
+
+def test_encoding_lists():
+    value = [b'arst', b'tsra', b'a', b'']
+    s = encode(value)
+    actual = decode(s)
+    assert actual == value

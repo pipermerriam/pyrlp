@@ -116,19 +116,22 @@ def consume_length_prefix(rlp, start):
 
     :param rlp: the rlp byte string to read from
     :param start: the position at which to start reading
-    :returns: a tuple ``(type, length, end)``, where ``type`` is either ``str``
+    :returns: a tuple ``(type, length, end)``, where ``type`` is either ``bytes``
               or ``list`` depending on the type of the following payload,
               ``length`` is the length of the payload in bytes, and ``end`` is
               the position of the first payload byte in the rlp string
     """
     b0 = rlp[start]
     if b0 < 128:  # single byte
+        # <payload>
         return (bytes, 1, start)
     elif b0 < SHORT_STRING:  # short string
+        # <length-byte><payload>
         if b0 - 128 == 1 and rlp[start + 1] < 128:
             raise DecodingError('Encoded as short string although single byte was possible', rlp)
         return (bytes, b0 - 128, start + 1)
     elif b0 < 192:  # long string
+        # <length-byte><encoded-length><payload>
         ll = b0 - 183  # - (128 + 56 - 1)
         if rlp[start + 1:start + 2] == b'\x00':
             raise DecodingError('Length starts with zero bytes', rlp)
@@ -136,10 +139,11 @@ def consume_length_prefix(rlp, start):
         if l < 56:
             raise DecodingError('Long string prefix used for short string', rlp)
         return (bytes, l, start + 1 + ll)
-    elif b0 < 192 + 56:  # short list
+    elif b0 < 248:  # (192 + 56) short list
         return (list, b0 - 192, start + 1)
     else:  # long list
-        ll = b0 - 192 - 56 + 1
+        # <length-byte><encoded-length><payload>
+        ll = b0 - 247  # (192 - 56 + 1)
         if rlp[start + 1:start + 2] == b'\x00':
             raise DecodingError('Length starts with zero bytes', rlp)
         l = big_endian_to_int(rlp[start + 1:start + 1 + ll])
@@ -222,6 +226,134 @@ def decode(rlp, sedes=None, strict=True, **kwargs):
         return obj
     else:
         return item
+
+
+def consume_length_prefix_stream(rlp_stream):
+    try:
+        b0 = rlp_stream.read(1)[0]
+    except:
+        raise DecodingError('Empty stream', rlp_stream.getvalue())
+
+    if b0 < 128:  # single byte
+        # <payload>
+        rlp_stream.seek(rlp_stream.tell() - 1)
+        return (bytes, 1)
+    elif b0 < SHORT_STRING:  # short string
+        # <length-byte><payload>
+        if b0 - 128 == 1:
+            loc = rlp_stream.tell()
+            next_byte = rlp_stream.read(1)
+            rlp_stream.seek(loc)
+            if next_byte and next_byte[0] < 128:
+                raise DecodingError(
+                    'Encoded as short string although single byte was possible',
+                    rlp_stream.getvalue(),
+                )
+        return (bytes, b0 - 128)
+    elif b0 < 192:  # long string
+        # <length-byte><encoded-length><payload>
+        ll = b0 - 183  # - (128 + 56 - 1)
+        length_bytes = rlp_stream.read(ll)
+        if length_bytes and length_bytes[0] == b'\x00':
+            raise DecodingError('Length starts with zero bytes', rlp_stream.getvalue())
+        l = big_endian_to_int(length_bytes)
+        if l < 56:
+            raise DecodingError(
+                'Long string prefix used for short string', rlp_stream.getvalue()
+            )
+        return (bytes, l)
+    elif b0 < 248:  # (192 + 56) short list
+        return (list, b0 - 192)
+    else:  # long list
+        # <length-byte><encoded-length><payload>
+        ll = b0 - 247  # (192 - 56 + 1)
+        length_bytes = rlp_stream.read(ll)
+        if length_bytes and length_bytes[0] == b'\x00':
+            raise DecodingError('Length starts with zero bytes', rlp_stream.getvalue())
+        l = big_endian_to_int(length_bytes)
+        if l < 56:
+            raise DecodingError(
+                'Long string prefix used for short string', rlp_stream.getvalue()
+            )
+        return (list, l)
+
+
+def consume_payload_stream(rlp_stream, type_, length):
+    """Read the payload of an item from an RLP string.
+
+    :param rlp: the rlp string to read from
+    :param type_: the type of the payload (``bytes`` or ``list``)
+    :param start: the position at which to start reading
+    :param length: the length of the payload in bytes
+    :returns: a tuple ``(item, end)``, where ``item`` is the read item and
+              ``end`` is the position of the first unprocessed byte
+    """
+    if type_ is bytes:
+        value = rlp_stream.read(length)
+        if len(value) != length:
+            raise DecodingError('not enough bytes')
+        return value
+    elif type_ is list:
+        items = []
+        start_pos = rlp_stream.tell()
+
+        while rlp_stream.tell() < start_pos + length:
+            t, l = consume_length_prefix_stream(rlp_stream)
+            items.append(consume_payload_stream(rlp_stream, t, l))
+
+        return items
+    else:
+        raise TypeError('Type must be either list or bytes')
+
+
+def consume_item_stream(rlp_stream):
+    """Read an item from an RLP string.
+
+    :param rlp: the rlp string to read from
+    :param start: the position at which to start reading
+    :returns: a tuple ``(item, end)`` where ``item`` is the read item and
+              ``end`` is the position of the first unprocessed byte
+    """
+    t, l = consume_length_prefix(rlp_stream)
+    return consume_payload(rlp_stream, t, l)
+
+
+def decode_stream(rlp, sedes=None, strict=True, **kwargs):
+    """Decode an RLP encoded object.
+
+    If the deserialized result `obj` has an attribute :attr:`_cached_rlp` (e.g. if `sedes` is a
+    subclass of :class:`rlp.Serializable`) it will be set to `rlp`, which will improve performance
+    on subsequent :func:`rlp.encode` calls. Bear in mind however that `obj` needs to make sure that
+    this value is updated whenever one of its fields changes or prevent such changes entirely
+    (:class:`rlp.sedes.Serializable` does the latter).
+
+    :param sedes: an object implementing a function ``deserialize(code)`` which will be applied
+                  after decoding, or ``None`` if no deserialization should be performed
+    :param \*\*kwargs: additional keyword arguments that will be passed to the deserializer
+    :param strict: if false inputs that are longer than necessary don't cause an exception
+    :returns: the decoded and maybe deserialized Python object
+    :raises: :exc:`rlp.DecodingError` if the input string does not end after the root item and
+             `strict` is true
+    :raises: :exc:`rlp.DeserializationError` if the deserialization fails
+    """
+    import io
+    rlp_stream = io.BytesIO(rlp)
+    item = consume_item(rlp_stream)
+
+    if sedes:
+        obj = sedes.deserialize(item, **kwargs)
+        if hasattr(obj, '_cached_rlp'):
+            obj._cached_rlp = rlp
+            assert not isinstance(obj, Serializable) or not obj.is_mutable()
+        return obj
+    else:
+        return item
+
+
+consume_length_prefix = consume_length_prefix_stream
+consume_payload = consume_payload_stream
+consume_item = consume_item_stream
+decode = decode_stream
 
 
 def infer_sedes(obj):

@@ -4,6 +4,7 @@ from eth_utils import (
     big_endian_to_int,
     int_to_big_endian,
     is_bytes,
+    to_list,
 )
 
 from rlp.atomic import (
@@ -190,6 +191,76 @@ def consume_item(rlp, start):
     """
     t, l, s = consume_length_prefix(rlp, start)
     return consume_payload(rlp, s, t, l)
+
+
+def _bytes_to_serial(rlp):
+    b0 = rlp[0]
+
+    if b0 < 128:  # single byte
+        #if len(rlp) != 1:
+        #    raise DecodingError('1')
+        return rlp
+    elif b0 < SHORT_STRING:  # short string
+        if b0 - 128 == 1 and rlp[1] < 128:
+            raise DecodingError('Encoded as short string although single byte was possible', rlp)
+        #if len(rlp) != 1 + (b0 - 128):
+        #    raise DecodingError('2')
+        return rlp[:(b0 - 128) + 1]
+    elif b0 < 192:  # long string
+        ll = b0 - 183  # - (128 + 56 - 1)
+        if rlp[1:2] == b'\x00':
+            raise DecodingError('Length starts with zero bytes', rlp)
+        l = big_endian_to_int(rlp[1:1 + ll])
+        if l < 56:
+            raise DecodingError('Long string prefix used for short string', rlp)
+        #if len(rlp) != 1 + ll + l:
+        #    raise DecodingError('3')
+        return rlp[:1 + ll + l]
+    else:
+        raise DecodingError('not a byte string')
+
+
+@to_list
+def _list_to_serials(rlp):
+    start = 0
+
+    while start < len(rlp):
+        b0 = rlp[start]
+        if b0 < 192:
+            item = _bytes_to_serial(rlp[start:])
+            start += len(item)
+            yield item
+        elif b0 < 192 + 56:
+            yield rlp[start:start + (b0 - 192) + 1]
+            start += (b0 - 192) + 1
+        else:
+            ll = b0 - 192 - 56 + 1
+            if rlp[start + 1:start + 2] == b'\x00':
+                raise DecodingError('Length starts with zero bytes', rlp)
+            l = big_endian_to_int(rlp[start + 1:start + 1 + ll])
+            if l < 56:
+                raise DecodingError('Long list prefix used for short list', rlp)
+            yield rlp[start:start + 1 + ll + l]
+            start += 1 + ll + l
+
+
+def to_serial(rlp):
+    if not rlp:
+        raise DecodingError('0')
+    b0 = rlp[0]
+
+    if b0 < 192:  # bytestring values
+        return rlp
+    elif b0 < 192 + 56:  # short list
+        return _list_to_serials(rlp[1:(b0 - 192) + 1])
+    else:  # long list
+        ll = b0 - 192 - 56 + 1
+        if rlp[1] == b'\x00':
+            raise DecodingError('Length starts with zero bytes', rlp)
+        l = big_endian_to_int(rlp[1:1 + ll])
+        if l < 56:
+            raise DecodingError('Long list prefix used for short list', rlp)
+        return _list_to_serials(rlp[1 + ll:1 + ll + l])
 
 
 def decode(rlp, sedes=None, strict=True, **kwargs):
